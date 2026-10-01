@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pixel Dungeon</title>
+  <style>
+    :root {
+      --cream: #f3e3bd;
+      --gold: #ffd45c;
+      --panel: #191922;
+      --line: #655567;
+      --green: #83f27c;
+      --red: #ff6969;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      color: var(--cream);
+      background: radial-gradient(ellipse at center, #292435 0%, #111018 68%, #08080c 100%);
+      font-family: "Courier New", monospace;
+    }
+
+    .game { width: min(96vw, 800px); }
+
+    h1 {
+      margin: 0 0 12px;
+      color: var(--gold);
+      text-align: center;
+      font-size: clamp(23px, 6vw, 38px);
+      letter-spacing: 3px;
+      text-shadow: 4px 4px #6d3434, 7px 7px #111;
+    }
+
+    .hud {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      margin-bottom: 7px;
+    }
+
+    .stat, .controls {
+      border: 3px solid var(--line);
+      background: var(--panel);
+      box-shadow: inset 0 0 0 2px #0b0b10;
+    }
+
+    .stat {
+      min-height: 48px;
+      padding: 6px 9px;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .label {
+      display: block;
+      color: #aaa0ad;
+      font-size: 10px;
+      letter-spacing: 1px;
+    }
+
+    .value { font-weight: bold; white-space: nowrap; }
+    #health { color: var(--red); }
+    #weapon { color: var(--gold); }
+
+    .canvas-wrap {
+      position: relative;
+      border: 4px solid #655567;
+      background: #09090d;
+      box-shadow: 0 12px 40px #000b;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      image-rendering: pixelated;
+    }
+
+    .message {
+      min-height: 24px;
+      margin: 7px 0;
+      color: #d7c9ad;
+      text-align: center;
+      font-size: 12px;
+    }
+
+    .controls {
+      padding: 9px;
+      color: #cfc5bd;
+      text-align: center;
+      font-size: 11px;
+      line-height: 1.8;
+    }
+
+    button {
+      border: 3px solid #80623a;
+      background: #352719;
+      color: var(--cream);
+      padding: 10px 14px;
+      font: bold 13px "Courier New", monospace;
+      cursor: pointer;
+    }
+
+    button:hover, button.selected {
+      background: #60401e;
+      color: #fff0a6;
+      border-color: var(--gold);
+    }
+
+    .menu-buttons {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    #soundButton { min-width: 130px; }
+
+    @media (max-width: 520px) {
+      .hud { grid-template-columns: repeat(2, 1fr); }
+      .controls { font-size: 10px; }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="game">
+    <h1>⚔ PIXEL DUNGEON ⚔</h1>
+
+    <section class="hud">
+      <div class="stat">
+        <span class="label">STAGE</span>
+        <span class="value" id="stage">—</span>
+      </div>
+      <div class="stat">
+        <span class="label">LEBEN</span>
+        <span class="value" id="health">♡ ♡ ♡</span>
+      </div>
+      <div class="stat">
+        <span class="label">WAFFE</span>
+        <span class="value" id="weapon">⚔ SCHWERT</span>
+      </div>
+      <div class="stat">
+        <span class="label">MÜNZEN / GEGNER</span>
+        <span class="value" id="score">◈ 0　☠ 0</span>
+      </div>
+    </section>
+
+    <div class="canvas-wrap">
+      <canvas id="game" width="720" height="480"></canvas>
+    </div>
+
+    <div class="message" id="message">
+      Wähle einen Schwierigkeitsgrad und starte dein Abenteuer.
+    </div>
+
+    <div class="controls">
+      BEWEGEN: WASD / PFEILTASTEN　 ·　 ANGRIFF: LEERTASTE / J<br>
+      WAFFE WECHSELN: Q　 ·　 PAUSE: ESC
+    </div>
+
+    <div class="menu-buttons">
+      <button id="startButton">▶ SPIEL STARTEN</button>
+      <button class="difficulty selected" data-difficulty="normal">NORMAL</button>
+      <button class="difficulty" data-difficulty="easy">LEICHT</button>
+      <button class="difficulty" data-difficulty="hard">SCHWER</button>
+      <button id="soundButton">♫ TON: AN</button>
+    </div>
+  </main>
+
+  <script>
+    (() => {
+      const canvas = document.querySelector("#game");
+      const ctx = canvas.getContext("2d");
+      const TILE = 40;
+      const COLS = 18;
+      const ROWS = 12;
+
+      const ui = {
+        stage: document.querySelector("#stage"),
+        health: document.querySelector("#health"),
+        weapon: document.querySelector("#weapon"),
+        score: document.querySelector("#score"),
+        message: document.querySelector("#message"),
+        start: document.querySelector("#startButton"),
+        sound: document.querySelector("#soundButton")
+      };
+
+      const weapons = [
+        { id: "sword", name: "SCHWERT", icon: "⚔", damage: 1, range: 58, cooldown: 0.34 },
+        { id: "axe", name: "KAMPFAXT", icon: "♜", damage: 2, range: 64, cooldown: 0.55 },
+        { id: "spear", name: "SPEER", icon: "↗", damage: 1, range: 88, cooldown: 0.42 }
+      ];
+
+      const difficulties = {
+        easy:   { label: "LEICHT", health: 5, enemyHealth: 0.8, enemySpeed: 0.78, enemyDamage: 1 },
+        normal: { label: "NORMAL", health: 3, enemyHealth: 1, enemySpeed: 1, enemyDamage: 1 },
+        hard:   { label: "SCHWER", health: 2, enemyHealth: 1.4, enemySpeed: 1.28, enemyDamage: 1 }
+      };
+
+      let difficulty = "normal";
+      let soundEnabled = true;
+      let audioContext = null;
+      let map = [];
+      let player = null;
+      let enemies = [];
+      let items = [];
+      let stage = 0;
+      let health = 3;
+      let coins = 0;
+      let kills = 0;
+      let state = "menu";
+      let paused = false;
+      let lastTime = 0;
+      let elapsed = 0;
+      let hitFlash = 0;
+      let messageTimer = 0;
+      const keys = new Set();
+
+      function sound(frequency = 440, duration = 0.08, type = "square", volume = 0.035) {
+        if (!soundEnabled) return;
+
+        try {
+          audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
+          if (audioContext.state === "suspended") audioContext.resume();
+
+          const oscillator = audioContext.createOscillator();
+          const gain = audioContext.createGain();
+
+          oscillator.type = type;
+          oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+          gain.gain.setValueAtTime(volume, audioContext.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
+
+          oscillator.connect(gain);
+          gain.connect(audioContext.destination);
+          oscillator.start();
+          oscillator.stop(audioContext.currentTime + duration);
+        } catch (_) {
+          // Das Spiel funktioniert auch ohne Audio-Unterstützung.
+        }
+      }
+
+      function setMessage(text, seconds = 2) {
+        ui.message.textContent = text;
+        messageTimer = seconds;
+      }
+
+      function randomOpenTile(minDistance = 100) {
+        for (let i = 0; i < 500; i++) {
+          const tx = 2 + Math.floor(Math.random() * (COLS - 4));
+          const ty = 2 + Math.floor(Math.random() * (ROWS - 4));
+
+          if (!map[ty] || map[ty][tx] !== 0) continue;
+
+          const x = tx * TILE + TILE / 2;
+          const y = ty * TILE + TILE / 2;
+
+          if (player && Math.hypot(x - player.x, y - player.y) < minDistance) continue;
+          if (items.some(item => Math.hypot(x - item.x, y - item.y) < 30)) continue;
+
+          return { x, y };
+        }
+
+        return { x: 5 * TILE, y: 5 * TILE };
+      }
+
+      function createMap() {
+        map = Array.from({ length: ROWS }, (_, y) =>
+          Array.from({ length: COLS }, (_, x) =>
+            x === 0 || y === 0 || x === COLS - 1 || y === ROWS - 1 ? 1 : 0
+          )
+        );
+
+        for (let i = 0; i < 13; i++) {
+          const x = 2 + Math.floor(Math.random() * (COLS - 4));
+          const y = 2 + Math.floor(Math.random() * (ROWS - 4));
+
+          if (!(x < 5 && y < 5) && !(x > COLS - 5 && y > ROWS - 5)) {
+            map[y][x] = 1;
+          }
+        }
+      }
+
+      function makeEnemy(type, x, y) {
+        const d = difficulties[difficulty];
+        const base = {
+          zombie:  { hp: 2, speed: 45, damage: 1, color: "#6b984e" },
+          runner:  { hp: 1, speed: 86, damage: 1, color: "#c1763d" },
+          shooter: { hp: 2, speed: 36, damage: 1, color: "#8068bd" },
+          brute:   { hp: 5, speed: 28, damage: 1, color: "#ad4945" }
+        }[type];
+
+        const hp = Math.max(1, Math.ceil(base.hp * d.enemyHealth));
+
+        return {
+          type, x, y,
+          hp,
+          maxHp: hp,
+          speed: base.speed * d.enemySpeed,
+          damage: base.damage * d.enemyDamage,
+          color: base.color,
+          attackCooldown: 0.5 + Math.random(),
+          shotCooldown: 1.1 + Math.random(),
+          hurtTime: 0,
+          flash: 0,
+          anim: Math.random() * 6,
+          dirX: 0,
+          dirY: 1,
+          chargeTime: 0,
+          projectile: null
+        };
+      }
+
+      function createStage() {
+        createMap();
+
+        player = {
+          x: 1.5 * TILE,
+          y: 1.5 * TILE,
+          size: 22,
+          speed: 170,
+          dirX: 1,
+          dirY: 0,
+          attackTime: 0,
+          attackCooldown: 0,
+          walkTime: 0,
+          hurtTime: 0,
+          weaponIndex: 0
+        };
+
+        enemies = [];
+        items = [];
+
+        const addEnemies = (type, count) => {
+          for (let i = 0; i < count; i++) {
+            const p = randomOpenTile(140);
+            enemies.push(makeEnemy(type, p.x, p.y));
+          }
+        };
+
+        if (stage === 1) {
+          addEnemies("zombie", difficulty === "hard" ? 7 : 5);
+        } else if (stage === 2) {
+          addEnemies("zombie", 3);
+          addEnemies("runner", 2);
+          addEnemies("shooter", difficulty === "easy" ? 1 : 2);
+        } else {
+          addEnemies("zombie", 3);
+          addEnemies("runner", 2);
+          addEnemies("shooter", 2);
+          addEnemies("brute", Math.min(1 + Math.floor((stage - 3) / 2), 3));
+        }
+
+        const weaponDrop = randomOpenTile(80);
+        items.push({
+          x: weaponDrop.x,
+          y: weaponDrop.y,
+          type: stage % 2 === 0 ? "axe" : "spear"
+        });
+
+        for (let i = 0; i < 5; i++) {
+          const p = randomOpenTile(50);
+          items.push({ x: p.x, y: p.y, type: "coin" });
+        }
+
+        updateHud();
+      }
+
+      function startGame() {
+        try {
+          audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
+        } catch (_) {}
+
+        stage = 1;
+        health = difficulties[difficulty].health;
+        coins = 0;
+        kills = 0;
+        paused = false;
+        state = "playing";
+        createStage();
+        setMessage(`Stage 1 · ${difficulties[difficulty].label}: Besiege die Zombies!`, 3);
+        sound(660, 0.12);
+      }
+
+      function updateHud() {
+        const names = ["—", "ZOMBIE-KRYPTA", "SCHÜTZEN-HALLE", "DÄMONEN-GRUFT"];
+        ui.stage.textContent = stage
+          ? `${String(stage).padStart(2, "0")} · ${names[Math.min(stage, 3)]}`
+          : "—";
+
+        ui.health.textContent =
+          "♥ ".repeat(Math.max(0, health)) +
+          "♡ ".repeat(Math.max(0, difficulties[difficulty].health - health));
+
+        const weapon = weapons[player?.weaponIndex || 0];
+        ui.weapon.textContent = `${weapon.icon} ${weapon.name}`;
+        ui.score.textContent = `◈ ${coins}　☠ ${kills}`;
+      }
+
+      function isBlocked(x, y, size = 20) {
+        const left = Math.floor((x - size / 2) / TILE);
+        const right = Math.floor((x + size / 2) / TILE);
+        const top = Math.floor((y - size / 2) / TILE);
+        const bottom = Math.floor((y + size / 2) / TILE);
+
+        for (let ty = top; ty <= bottom; ty++) {
+          for (let tx = left; tx <= right; tx++) {
+            if (!map[ty] || map[ty][tx] !== 0) return true;
+          }
+        }
+
+        return false;
+      }
+
+      function move(entity, dx, dy) {
+        const size = entity.size || 20;
+        if (!isBlocked(entity.x + dx, entity.y, size)) entity.x += dx;
+        if (!isBlocked(entity.x, entity.y + dy, size)) entity.y += dy;
+      }
+
+      function attack() {
+        if (state !== "playing" || paused || player.attackCooldown > 0) return;
+
+        const weapon = weapons[player.weaponIndex];
+        player.attackTime = 0.25;
+        player.attackCooldown = weapon.cooldown;
+
+        sound(weapon.id === "axe" ? 180 : 320, 0.09, "sawtooth");
+
+        for (const enemy of enemies) {
+          const dx = enemy.x - player.x;
+          const dy = enemy.y - player.y;
+          const distance = Math.hypot(dx, dy);
+
+          if (distance > weapon.range || distance < 1) continue;
+
+          const dot =
+            (dx / distance) * player.dirX +
+            (dy / distance) * player.dirY;
+
+          if (dot < 0.15) continue;
+
+          enemy.hp -= weapon.damage;
+          enemy.hurtTime = 0.18;
+          enemy.flash = 0.12;
+
+          const push = weapon.id === "axe" ? 35 : 20;
+          move(enemy, dx / distance * push, dy / distance * push);
+          sound(120, 0.05, "square", 0.025);
+        }
+
+        const oldCount = enemies.length;
+        enemies = enemies.filter(enemy => enemy.hp > 0);
+        const defeated = oldCount - enemies.length;
+
+        if (defeated) {
+          kills += defeated;
+          sound(520, 0.12, "triangle");
+        }
+
+        updateHud();
+      }
+
+      function damagePlayer(amount, vx, vy) {
+        if (player.hurtTime > 0 || state !== "playing") return;
+
+        health -= amount;
+        player.hurtTime = 0.7;
+        hitFlash = 0.2;
+
+        const length = Math.hypot(vx, vy) || 1;
+        move(player, -vx / length * 22, -vy / length * 22);
+        sound(100, 0.18, "sawtooth", 0.06);
+
+        if (health <= 0) {
+          health = 0;
+          state = "gameover";
+          setMessage("Du bist in der Krypta gefallen. Starte ein neues Spiel.", 999);
+        }
+
+        updateHud();
+      }
+
+      function update(dt) {
+        if (state !== "playing" || paused) return;
+
+        messageTimer = Math.max(0, messageTimer - dt);
+
+        if (messageTimer === 0) {
+          ui.message.textContent = enemies.length
+            ? "Besiege alle Gegner und finde den grünen Ausgang."
+            : "Ausgang offen! Betritt das grüne Portal.";
+        }
+
+        hitFlash = Math.max(0, hitFlash - dt);
+        player.attackTime = Math.max(0, player.attackTime - dt);
+        player.attackCooldown = Math.max(0, player.attackCooldown - dt);
+        player.hurtTime = Math.max(0, player.hurtTime - dt);
+
+        if (keys.has(" ") || keys.has("j")) {
+          keys.delete(" ");
+          keys.delete("j");
+          attack();
+        }
+
+        if (keys.has("q")) {
+          keys.delete("q");
+          player.weaponIndex = (player.weaponIndex + 1) % weapons.length;
+          sound(500, 0.07, "triangle");
+          updateHud();
+        }
+
+        let dx = 0;
+        let dy = 0;
+
+        if (keys.has("ArrowLeft") || keys.has("a")) dx--;
+        if (keys.has("ArrowRight") || keys.has("d")) dx++;
+        if (keys.has("ArrowUp") || keys.has("w")) dy--;
+        if (keys.has("ArrowDown") || keys.has("s")) dy++;
+
+        if (dx || dy) {
+          const length = Math.hypot(dx, dy);
+          dx /= length;
+          dy /= length;
+          player.dirX = dx;
+          player.dirY = dy;
+          player.walkTime += dt * 12;
+          move(player, dx * player.speed * dt, dy * player.speed * dt);
+        }
+
+        for (const enemy of enemies) {
+          enemy.anim += dt * (enemy.type === "runner" ? 13 : 7);
+          enemy.hurtTime = Math.max(0, enemy.hurtTime - dt);
+          enemy.flash = Math.max(0, enemy.flash - dt);
+          enemy.attackCooldown -= dt;
+          enemy.shotCooldown -= dt;
+
+          const vx = player.x - enemy.x;
+          const vy = player.y - enemy.y;
+          const distance = Math.hypot(vx, vy) || 1;
+
+          enemy.dirX = vx / distance;
+          enemy.dirY = vy / distance;
+
+          if (enemy.type === "shooter") {
+            if (distance > 205) {
+              move(enemy, enemy.dirX * enemy.speed * dt, enemy.dirY * enemy.speed * dt);
+            } else if (distance < 135) {
+              move(enemy, -enemy.dirX * enemy.speed * dt, -enemy.dirY * enemy.speed * dt);
+            }
+
+            if (enemy.shotCooldown <= 0 && distance < 320) {
+              enemy.projectile = {
+                x: enemy.x,
+                y: enemy.y,
+                vx: enemy.dirX * 165,
+                vy: enemy.dirY * 165,
+                life: 2.8
+              };
+
+              enemy.shotCooldown = 1.7;
+              sound(260, 0.06, "triangle", 0.018);
+            }
+          } else if (enemy.type === "brute") {
+            if (enemy.chargeTime > 0) {
+              enemy.chargeTime -= dt;
+              move(enemy, enemy.dirX * 210 * dt, enemy.dirY * 210 * dt);
+            } else if (distance > 30) {
+              move(enemy, enemy.dirX * enemy.speed * dt, enemy.dirY * enemy.speed * dt);
+            } else if (enemy.attackCooldown <= 0) {
+              enemy.chargeTime = 0.35;
+              enemy.attackCooldown = 2.2;
+            }
+          } else if (distance > 28) {
+            move(enemy, enemy.dirX * enemy.speed * dt, enemy.dirY * enemy.speed * dt);
+          }
+
+          if (enemy.projectile) {
+            const shot = enemy.projectile;
+            shot.x += shot.vx * dt;
+            shot.y += shot.vy * dt;
+            shot.life -= dt;
+
+            if (Math.hypot(shot.x - player.x, shot.y - player.y) < 17) {
+              enemy.projectile = null;
+              damagePlayer(enemy.damage, shot.vx, shot.vy);
+            } else if (shot.life <= 0 || isBlocked(shot.x, shot.y, 7)) {
+              enemy.projectile = null;
+            }
+          }
+
+          if (distance < 31 && enemy.attackCooldown <= 0 && enemy.type !== "shooter") {
+            damagePlayer(enemy.damage, vx, vy);
+            enemy.attackCooldown = enemy.type === "brute" ? 1.6 : 1;
+          }
+        }
+
+        items = items.filter(item => {
+          if (Math.hypot(player.x - item.x, player.y - item.y) > 23) return true;
+
+          if (item.type === "coin") {
+            coins++;
+            setMessage("+1 MÜNZE", 0.8);
+            sound(760, 0.08, "square");
+          } else {
+            const index = weapons.findIndex(weapon => weapon.id === item.type);
+
+            if (index >= 0) {
+              player.weaponIndex = index;
+              setMessage(`Waffe gefunden: ${weapons[index].name}`, 1.8);
+              sound(600, 0.12, "triangle");
+            }
+          }
+
+          updateHud();
+          return false;
+        });
+
+        const portalX = (COLS - 2) * TILE + TILE / 2;
+        const portalY = (ROWS - 2) * TILE + TILE / 2;
+
+        if (enemies.length === 0 && Math.hypot(player.x - portalX, player.y - portalY) < 25) {
+          stage++;
+          sound(880, 0.3, "triangle");
+          setMessage(`Stage ${stage} …`, 1);
+          state = "transition";
+
+          setTimeout(() => {
+            if (state === "transition") {
+              createStage();
+              state = "playing";
+              setMessage(`Stage ${stage}: Neue Gegner sind erschienen!`, 2.5);
+            }
+          }, 900);
+        }
+
+        updateHud();
+      }
+
+      function drawFloorAndWalls() {
+        ctx.fillStyle = "#111116";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        for (let y = 0; y < ROWS; y++) {
+          for (let x = 0; x < COLS; x++) {
+            const px = x * TILE;
+            const py = y * TILE;
+
+            if (map[y][x]) {
+              ctx.fillStyle = "#29272f";
+              ctx.fillRect(px, py, TILE, TILE);
+              ctx.strokeStyle = "#15141b";
+              ctx.lineWidth = 3;
+              ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
+
+              ctx.fillStyle = "#38343e";
+              ctx.fillRect(px + 4, py + 5, 13, 7);
+              ctx.fillRect(px + 22, py + 5, 13, 7);
+              ctx.fillRect(px + 10, py + 17, 20, 7);
+              ctx.fillRect(px + 4, py + 29, 13, 7);
+              ctx.fillRect(px + 22, py + 29, 13, 7);
+            } else {
+              ctx.fillStyle = (x + y) % 2 ? "#24232a" : "#292830";
+              ctx.fillRect(px, py, TILE, TILE);
+              ctx.strokeStyle = "#1d1c23";
+              ctx.lineWidth = 2;
+              ctx.strokeRect(px, py, TILE, TILE);
+
+              ctx.fillStyle = "#302e36";
+              ctx.fillRect(px + 5, py + 8, 2, 2);
+              ctx.fillRect(px + 30, py + 27, 2, 2);
+            }
+          }
+        }
+
+        if (enemies.length === 0 && player) drawPortal();
+      }
+
+      function drawPortal() {
+        const x = (COLS - 2) * TILE;
+        const y = (ROWS - 2) * TILE;
+        const pulse = Math.sin(elapsed * 5) * 3;
+
+        ctx.fillStyle = "#17452c";
+        ctx.fillRect(x + 5, y + 3, 30, 34);
+
+        ctx.fillStyle = "#38e66c";
+        ctx.fillRect(x + 11 - pulse / 2, y + 6, 18 + pulse, 28);
+
+        ctx.fillStyle = "#c5ffd0";
+        ctx.fillRect(x + 23, y + 16 + Math.sin(elapsed * 8) * 4, 3, 3);
+
+        ctx.fillStyle = "#d8f5df";
+        ctx.font = "10px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("EXIT", x + 20, y + 46);
+      }
+
+      function drawCharacter(x, y, color, dirX, dirY, hurt, anim, isPlayer = false) {
+        const bob = Math.sin(anim) * 1.5;
+        const leg = Math.sin(anim * 1.5) * 2;
+        const px = Math.round(x);
+        const py = Math.round(y + bob);
+
+        ctx.fillStyle = "#101014";
+        ctx.fillRect(px - 11, py + 8, 22, 5);
+
+        ctx.fillStyle = "#29242b";
+        ctx.fillRect(px - 8, py + 2 + leg, 6, 8);
+        ctx.fillRect(px + 2, py + 2 - leg, 6, 8);
+
+        ctx.fillStyle = hurt ? "#fff" : color;
+        ctx.fillRect(px - 9, py - 9, 18, 13);
+
+        ctx.fillStyle = hurt ? "#fff" : (isPlayer ? "#704539" : "#493544");
+        ctx.fillRect(px - 8, py - 12, 16, 4);
+
+        ctx.fillStyle = "#d4a17e";
+        ctx.fillRect(px - 6, py - 19, 12, 9);
+
+        ctx.fillStyle = isPlayer ? "#30242a" : "#352b39";
+        ctx.fillRect(px - 7, py - 21, 14, 4);
+
+        ctx.fillStyle = "#171719";
+
+        if (Math.abs(dirX) > Math.abs(dirY)) {
+          ctx.fillRect(dirX > 0 ? px + 1 : px - 4, py - 16, 3, 2);
+        } else {
+          ctx.fillRect(px - 4, py - 16, 2, 2);
+          ctx.fillRect(px + 2, py - 16, 2, 2);
+        }
+      }
+
+      function drawPlayer() {
+        drawCharacter(
+          player.x, player.y, "#a64b37",
+          player.dirX, player.dirY,
+          player.hurtTime > 0, player.walkTime, true
+        );
+
+        if (player.attackTime > 0) {
+          const weapon = weapons[player.weaponIndex];
+          const angle = Math.atan2(player.dirY, player.dirX);
+          const swing = Math.sin((player.attackTime / 0.25) * Math.PI);
+          const length = (weapon.id === "spear" ? 43 : 32) + swing * 8;
+          const tipX = player.x + Math.cos(angle) * length;
+          const tipY = player.y + Math.sin(angle) * length;
+
+          ctx.strokeStyle = weapon.id === "axe" ? "#d0d4e0" : "#f4e7c7";
+          ctx.lineWidth = weapon.id === "spear" ? 4 : 5;
+          ctx.beginPath();
+          ctx.moveTo(player.x, player.y);
+          ctx.lineTo(tipX, tipY);
+          ctx.stroke();
+
+          ctx.fillStyle = "#fff3a6";
+          ctx.fillRect(tipX - 2, tipY - 2, 4, 4);
+        }
+      }
+
+      function drawEnemy(enemy) {
+        const bob = Math.sin(enemy.anim) * 1.5;
+
+        drawCharacter(
+          enemy.x, enemy.y,
+          enemy.flash > 0 ? "#fff" : enemy.color,
+          enemy.dirX, enemy.dirY,
+          enemy.hurtTime > 0, enemy.anim
+        );
+
+        if (enemy.type === "zombie") {
+          ctx.fillStyle = "#caff78";
+          ctx.fillRect(enemy.x - 5, enemy.y - 16 + bob, 3, 3);
+          ctx.fillRect(enemy.x + 2, enemy.y - 16 + bob, 3, 3);
+        } else if (enemy.type === "runner") {
+          ctx.fillStyle = "#ffb248";
+          ctx.fillRect(enemy.x - 8, enemy.y - 22 + bob, 16, 3);
+        } else if (enemy.type === "shooter") {
+          ctx.fillStyle = "#e0bcff";
+          ctx.fillRect(enemy.x - 5, enemy.y - 16 + bob, 3, 3);
+          ctx.fillRect(enemy.x + 2, enemy.y - 16 + bob, 3, 3);
+          ctx.fillStyle = "#2b203c";
+          ctx.fillRect(enemy.x + 5, enemy.y - 3 + bob, 10, 4);
+        } else {
+          ctx.fillStyle = "#ffce62";
+          ctx.fillRect(enemy.x - 12, enemy.y - 23 + bob, 7, 7);
+          ctx.fillRect(enemy.x + 5, enemy.y - 23 + bob, 7, 7);
+        }
+
+        const width = enemy.type === "brute" ? 30 : 24;
+        ctx.fillStyle = "#111";
+        ctx.fillRect(enemy.x - width / 2, enemy.y - 29, width, 4);
+        ctx.fillStyle = enemy.type === "brute" ? "#ff7a57" : "#76ee5c";
+        ctx.fillRect(
+          enemy.x - width / 2,
+          enemy.y - 29,
+          width * enemy.hp / enemy.maxHp,
+          4
+        );
+
+        if (enemy.projectile) {
+          const p = enemy.projectile;
+          ctx.fillStyle = "#dca5ff";
+          ctx.fillRect(p.x - 4, p.y - 4, 8, 8);
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(p.x - 1, p.y - 1, 2, 2);
+        }
+      }
+
+      function drawItem(item) {
+        if (item.type === "coin") {
+          ctx.fillStyle = "#8a5b19";
+          ctx.fillRect(item.x - 6, item.y - 7, 12, 14);
+          ctx.fillStyle = "#ffd34e";
+          ctx.fillRect(item.x - 4, item.y - 6, 8, 12);
+          ctx.fillStyle = "#fff0a6";
+          ctx.fillRect(item.x - 1, item.y - 3, 2, 6);
+        } else {
+          ctx.fillStyle = "#f5d27a";
+          ctx.fillRect(item.x - 2, item.y - 13, 4, 24);
+          ctx.fillStyle = "#9c633b";
+          ctx.fillRect(item.x - 6, item.y + 6, 12, 4);
+          ctx.fillStyle = "#fff1b6";
+          ctx.fillRect(item.x - 1, item.y - 15, 2, 5);
+          ctx.fillStyle = "#fff";
+          ctx.font = "9px monospace";
+          ctx.textAlign = "center";
+          ctx.fillText("WAFFE", item.x, item.y + 23);
+        }
+      }
+
+      function drawOverlay(title, subtitle, color = "#ffd45c") {
+        ctx.fillStyle = "rgba(5, 5, 10, 0.82)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#111";
+        ctx.font = "bold 42px monospace";
+        ctx.fillText(title, canvas.width / 2 + 3, canvas.height / 2 + 3);
+
+        ctx.fillStyle = color;
+        ctx.fillText(title, canvas.width / 2, canvas.height / 2);
+
+        ctx.fillStyle = "#f3e3bd";
+        ctx.font = "15px monospace";
+        ctx.fillText(subtitle, canvas.width / 2, canvas.height / 2 + 34);
+      }
+
+      function drawMenuBackground() {
+        ctx.fillStyle = "#15141d";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        for (let y = 0; y < canvas.height; y += TILE) {
+          for (let x = 0; x < canvas.width; x += TILE) {
+            ctx.fillStyle = ((x / TILE + y / TILE) % 2) ? "#22212a" : "#282630";
+            ctx.fillRect(x, y, TILE, TILE);
+            ctx.strokeStyle = "#1b1a22";
+            ctx.strokeRect(x, y, TILE, TILE);
+          }
+        }
+
+        const t = elapsed;
+
+        for (let i = 0; i < 7; i++) {
+          const x = 90 + i * 90 + Math.sin(t + i) * 10;
+          const y = 120 + Math.sin(t * 1.5 + i * 2) * 12;
+          drawCharacter(
+            x, y,
+            i % 2 ? "#6b984e" : "#8068bd",
+            0, 1, false, t * 4 + i
+          );
+        }
+
+        ctx.fillStyle = "#f3e3bd";
+        ctx.textAlign = "center";
+        ctx.font = "bold 17px monospace";
+        ctx.fillText("EIN PIXEL-ABENTEUER", canvas.width / 2, 260);
+
+        ctx.font = "13px monospace";
+        ctx.fillStyle = "#c9bdad";
+        ctx.fillText(
+          "Wähle den Schwierigkeitsgrad und starte das Spiel.",
+          canvas.width / 2,
+          290
+        );
+
+        drawOverlay("PIXEL DUNGEON", "Kämpfe dich durch die Krypta!", "#ffd45c");
+      }
+
+      function draw() {
+        if (state === "menu") {
+          drawMenuBackground();
+          return;
+        }
+
+        drawFloorAndWalls();
+
+        for (const item of items) drawItem(item);
+        for (const enemy of enemies) drawEnemy(enemy);
+        if (player) drawPlayer();
+
+        if (hitFlash > 0) {
+          ctx.fillStyle = "rgba(255, 35, 35, 0.15)";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        if (paused) {
+          drawOverlay("PAUSE", "Drücke ESC zum Weiterspielen.", "#9eeaff");
+        } else if (state === "gameover") {
+          drawOverlay(
+            "GAME OVER",
+            `STAGE ${stage}　·　☠ ${kills}　·　Klicke auf „Spiel starten“.`,
+            "#ff7777"
+          );
+        } else if (state === "transition") {
+          drawOverlay(`STAGE ${stage + 1}`, "Der nächste Bereich wartet …", "#83f27c");
+        }
+      }
+
+      function loop(time) {
+        const dt = Math.min((time - lastTime) / 1000 || 0, 0.05);
+        lastTime = time;
+        elapsed += dt;
+        update(dt);
+        draw();
+        requestAnimationFrame(loop);
+      }
+
+      window.addEventListener("keydown", event => {
+        const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+
+        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(key)) {
+          event.preventDefault();
+        }
+
+        if (key === "Escape" && state === "playing") {
+          paused = !paused;
+          setMessage(paused ? "Pausiert." : "Weiter geht's!", 1);
+        }
+
+        keys.add(key);
+      });
+
+      window.addEventListener("keyup", event => {
+        const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+        keys.delete(key);
+      });
+
+      window.addEventListener("blur", () => keys.clear());
+
+      document.querySelectorAll(".difficulty").forEach(button => {
+        button.addEventListener("click", () => {
+          difficulty = button.dataset.difficulty;
+
+          document.querySelectorAll(".difficulty")
+            .forEach(b => b.classList.remove("selected"));
+
+          button.classList.add("selected");
+          setMessage(`Schwierigkeit: ${difficulties[difficulty].label}`, 2);
+          sound(440, 0.07, "triangle");
+          updateHud();
+        });
+      });
+
+      ui.start.addEventListener("click", startGame);
+
+      ui.sound.addEventListener("click", () => {
+        soundEnabled = !soundEnabled;
+        ui.sound.textContent = soundEnabled ? "♫ TON: AN" : "♫ TON: AUS";
+        if (soundEnabled) sound(600, 0.1, "triangle");
+      });
+
+      updateHud();
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>
